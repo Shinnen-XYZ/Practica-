@@ -4,6 +4,9 @@
 #include <netinet/in.h>
 #include <unistd.h>
 #include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <pthread.h>
 
 #include "zstring.h"
 #include "scanner.h"
@@ -369,6 +372,108 @@ void crearCliente( void ) {
 	}
 }
 
+/* ---- ESTRESAR ---- */
+typedef struct {
+    unsigned long int idOrigen;
+    unsigned long int idDestino;
+    char             *mensaje;
+    char             *ip;
+    int               numero;
+} ArgsEstresar;
+
+static void *hiloEstresar( void *arg ) {
+    ArgsEstresar *a = (ArgsEstresar*)arg;
+    int sock;
+    struct sockaddr_in addr;
+    addr.sin_port        = htons(SER_PORT);
+    addr.sin_family      = AF_INET;
+    addr.sin_addr.s_addr = inet_addr(a->ip);
+    sock = socket(AF_INET, SOCK_STREAM, 0);
+    if ( sock < 0 || connect(sock,(struct sockaddr*)&addr,sizeof(addr)) < 0 ) {
+        printf("[Estres] Hilo %d: no pudo conectarse\n", a->numero);
+        free(a);
+        return NULL;
+    }
+    InfoMensaje info;
+    info.numlinea  = 0;
+    info.idOrigen  = a->idOrigen;
+    info.idDestino = a->idDestino;
+    info.mensaje   = a->mensaje;
+    info.estado    = ENVIADO;
+    char buffer[BUFFER_LEN] = "";
+    char *str = serializarInfoMensaje(&info);
+    size_t len = strlen(str);
+    int pack   = calcPack(len);
+    strcpy(buffer, "ENVIAR_MENSAJE");
+    write(sock, buffer, sizeof(buffer));
+    write(sock, &len, sizeof(size_t));
+    for ( int i = 0; i < pack; i++ ) {
+        int ini = (i==0) ? 0 : i*(BUFFER_LEN-1);
+        memset(buffer, 0, BUFFER_LEN);
+        strncpy(buffer, str+ini, BUFFER_LEN-1);
+        write(sock, buffer, sizeof(buffer));
+    }
+    int res = -99;
+    read(sock, &res, sizeof(res));
+    printf("[Estres] Hilo %d: respuesta=%d\n", a->numero, res);
+    strcpy(buffer, "SALIR");
+    write(sock, buffer, sizeof(buffer));
+    close(sock);
+    free(a);
+    return NULL;
+}
+
+int sintaxisEstresar( unsigned int *nPet,
+                      unsigned long int *idO,
+                      unsigned long int *idD,
+                      char **msg ) {
+    int r = false;
+    unsigned long int tmp = 0;
+    char *m = zstr((char*)"");
+    r = confIni(true);              if(!r) return r;
+    r = parIntLargo(false, &tmp);   if(!r) return r;  *nPet = (unsigned)tmp;
+    r = parIntLargo(true,  idO);    if(!r) return r;
+    r = parIntLargo(true,  idD);    if(!r) return r;
+    r = parStr(true, &m, "");       if(!r) return r;
+    r = confFin(true);
+    if(r) *msg = m;
+    return r;
+}
+
+void estresar( void ) {
+    unsigned int      nPet = 0;
+    unsigned long int idO  = 0, idD = 0;
+    char             *msg  = NULL;
+    if ( !sintaxisEstresar(&nPet, &idO, &idD, &msg) ) {
+        mensajeConLineaErr("Parametros incorrectos para ESTRESAR");
+        recuperarse();
+        return;
+    }
+    char msj[100];
+    sprintf(msj, "Enviando %u peticiones concurrentes...", nPet);
+    mensajeConLinea(msj);
+    pthread_t *hilos = malloc(nPet * sizeof(pthread_t));
+    for ( unsigned int i = 0; i < nPet; i++ ) {
+        ArgsEstresar *args = malloc(sizeof(ArgsEstresar));
+        args->idOrigen  = idO;
+        args->idDestino = idD;
+        args->mensaje   = msg;
+        args->numero    = i + 1;
+        args->ip        = zstr((char*)"127.0.0.1");
+        if ( pthread_create(&hilos[i], NULL, hiloEstresar, args) != 0 ) {
+            perror("pthread_create");
+            free(args);
+            hilos[i] = 0;
+        }
+    }
+    for ( unsigned int i = 0; i < nPet; i++ )
+        if (hilos[i]) pthread_join(hilos[i], NULL);
+    free(hilos);
+    sprintf(msj, "Estres completado: %u mensajes enviados", nPet);
+    mensajeConLinea(msj);
+}
+/* ---- FIN ESTRESAR ---- */
+
 void lista( void ) {
 	char buffer[ BUFFER_LEN ] = "";
 	char *idLista = zstr( (char*)"" );
@@ -559,7 +664,8 @@ void parsear( char cfin ) {
 			case 51: enviarMensaje();
 					 break;
 
-			case 52: break;
+			case 52: estresar();
+					 break;
 
 			case 53: obtenerMensajes();
 					 break;
@@ -590,14 +696,14 @@ void getOpts( int ini, int argc, char* argv[], char* opt[] ) {
 	for( i = ini; i < argc; i++ ) {
         char const *opcion = argv[ i ];
 
-		//printf( "opcion: '%s'\n", opcion );
 		if( strcmp( opcion, "-f" ) == 0 ) {
-            opt[ 0 ] = zstr( argv[ i + 1 ] );
+            if( i + 1 < argc )
+                opt[ 0 ] = zstr( argv[ i + 1 ] );
         } else {
 			if( 0 == strcasecmp( opcion, "localhost" ) )
 				opt[ 1 ] = zstr( (char*)"127.0.0.1" );
 			else {
-				if( strcmp( argv[ i - 1 ], "-f" ) != 0 ) {
+				if( i == 0 || strcmp( argv[ i - 1 ], "-f" ) != 0 ) {
 					flag = esValidaIpV4( opcion );
 					if( true == flag ) {
 						opt[ 1 ] = zstr( (char*)opcion );

@@ -198,3 +198,71 @@ int eol() {
 void mensaje_error(const char *mensaje) {
     printf("ERROR: %s\n", mensaje);
 }
+
+/* Lee un identificador (usado por LISTA(C) o LISTA(M)) */
+int parId( int conComa, char **resultado ) {
+    if ( conComa ) {
+        lexico lex = Token(1);
+        if ( lex.atrib != E_coma ) {
+            mensaje_error("Se esperaba una coma");
+            return false;
+        }
+    }
+    lexico lex = Token(1);
+    if ( lex.atrib == E_identificador || (lex.atrib >= 50 && lex.atrib <= 56) ) {
+        *resultado = (char*)malloc( strlen(lex.C_lex) + 1 );
+        strcpy( *resultado, lex.C_lex );
+        return true;
+    }
+    mensaje_error("Se esperaba un identificador");
+    return false;
+}
+
+/* Lee una cadena entre comillas dobles */
+int parStr( int conComa, char **resultado, const char *sep ) {
+    if ( conComa ) {
+        lexico lex = Token(1);
+        if ( lex.atrib != E_coma ) {
+            mensaje_error("Se esperaba una coma");
+            return false;
+        }
+    }
+    /* Saltar espacios manualmente hasta la comilla de apertura */
+    do { lee_car(); } while ( token == ' ' || token == '\t' );
+
+    if ( token != '"' ) {
+        mensaje_error("Se esperaba comilla doble de apertura");
+        return false;
+    }
+    /* Leer contenido caracter a caracter hasta comilla de cierre */
+    char acumulado[512] = "";
+    char letra_buf[2]   = { 0, 0 };
+    lee_car();
+    while ( token != '"' && token != EOF && token != '\n' && token != '\0' ) {
+        letra_buf[0] = token;
+        strcat( acumulado, letra_buf );
+        lee_car();
+    }
+    /* token == '"' (comilla de cierre) — ya fue consumida, no hacer ReturnFile2 */
+    *resultado = (char*)malloc( strlen(acumulado) + 1 );
+    strcpy( *resultado, acumulado );
+    return true;
+}
+
+/* Lee un número entero largo sin signo */
+int parIntLargo( int conComa, unsigned long int *resultado ) {
+    if ( conComa ) {
+        lexico lex = Token(1);
+        if ( lex.atrib != E_coma ) {
+            mensaje_error("Se esperaba una coma");
+            return false;
+        }
+    }
+    lexico lex = Token(1);
+    if ( lex.atrib == E_num ) {
+        *resultado = strtoul( lex.C_lex, NULL, 10 );
+        return true;
+    }
+    mensaje_error("Se esperaba un numero entero");
+    return false;
+}
